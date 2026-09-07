@@ -1,0 +1,22 @@
+# Used when external docker compose is already running (Mode A).
+# When Testcontainers starts the compose (Mode B), AbstractIntegrationTest
+# overrides these values via @DynamicPropertySource with the actual ports.
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/carrinho_esperto
+    username: carrinho_esperto
+    password: carrinho_esperto
+
+  flyway:
+    enabled: true
+
+# Placeholder — AbstractAuthenticatedIntegrationTest provisions a real MiniStack
+# Cognito user pool and overrides this via @DynamicPropertySource.
+cognito:
+  issuer-uri: http://localhost:4566/test-pool-placeholder
+
+management:
+  endpoint:
+    health:
+      show-details: always

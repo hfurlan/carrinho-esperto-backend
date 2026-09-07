@@ -1,0 +1,23 @@
+# Local development — matches docker-compose.yaml service configuration.
+# Run: docker compose up -d --wait && mvn -f backend/pom.xml spring-boot:run -Dspring-boot.run.profiles=local
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/carrinho_esperto
+    username: carrinho_esperto
+    password: carrinho_esperto
+
+# MiniStack Cognito. Provisioned automatically by the `bootstrap` compose
+# service; source infra/ministack/.cognito.env before starting the backend.
+# Without real values the app still starts, but no token will validate.
+#
+# MiniStack mirrors AWS: tokens carry the AWS-style issuer, but the JWKS is
+# served from the local endpoint — so both properties are needed locally.
+cognito:
+  issuer-uri: ${COGNITO_ISSUER_URI:https://cognito-idp.us-east-1.amazonaws.com/local-pool-not-provisioned}
+  jwk-set-uri: ${COGNITO_JWK_SET_URI:http://localhost:4566/local-pool-not-provisioned/.well-known/jwks.json}
+
+management:
+  endpoint:
+    health:
+      show-details: always
