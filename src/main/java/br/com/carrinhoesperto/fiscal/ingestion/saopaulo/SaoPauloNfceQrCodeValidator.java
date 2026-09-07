@@ -25,8 +25,24 @@ public class SaoPauloNfceQrCodeValidator {
     /** Official SEFAZ-SP NFC-e public-consultation host. Exact match, no subdomains. */
     static final String HOST = "www.nfce.fazenda.sp.gov.br";
 
-    /** Consultation path (compared lower-cased; ASP.NET treats it case-insensitively). */
+    /** Consultation page path (compared lower-cased; ASP.NET treats it case-insensitively). */
     static final String PATH = "/nfceconsultapublica/paginas/consultaqrcode.aspx";
+
+    /**
+     * Same path in SEFAZ's canonical casing. Used when we build an outbound URL:
+     * SEFAZ 302-redirects a lower-cased first segment to this form, so emitting it
+     * up front usually avoids the redirect entirely.
+     */
+    static final String PATH_CANONICAL = "/NFCeConsultaPublica/Paginas/ConsultaQRCode.aspx";
+
+    /**
+     * Short entry path printed on current São Paulo NFC-e QR codes
+     * ({@code https://www.nfce.fazenda.sp.gov.br/qrcode?p=…}). SEFAZ redirects it
+     * to {@link #PATH} carrying the same {@code p}; we canonicalise to {@link #PATH}
+     * ourselves ({@link #canonicalConsultationUri}) so the outbound fetch still
+     * targets the exact consultation page and never has to follow a redirect.
+     */
+    static final String ENTRY_PATH = "/qrcode";
 
     private static final Pattern ACCESS_KEY = Pattern.compile("\\d{44}");
 
@@ -45,8 +61,41 @@ public class SaoPauloNfceQrCodeValidator {
         return scheme != null
             && (scheme.equalsIgnoreCase("https") || scheme.equalsIgnoreCase("http"))
             && HOST.equalsIgnoreCase(uri.getHost())
-            && uri.getPath() != null
-            && PATH.equals(uri.getPath().toLowerCase(Locale.ROOT));
+            && isConsultationOrEntryPath(uri.getPath());
+    }
+
+    private static boolean isConsultationOrEntryPath(String path) {
+        if (path == null) {
+            return false;
+        }
+        String normalized = path.toLowerCase(Locale.ROOT);
+        return PATH.equals(normalized) || ENTRY_PATH.equals(normalized);
+    }
+
+    /**
+     * Returns the consultation URI in canonical form: any accepted path (the
+     * short {@link #ENTRY_PATH} or a differently-cased consultation path) is
+     * rebuilt on {@link #PATH_CANONICAL}, keeping scheme, host, port and the raw
+     * query verbatim. A URI already in canonical form is returned unchanged. The
+     * result still passes {@link #extractAccessKey}.
+     */
+    public URI canonicalConsultationUri(URI uri) {
+        if (uri == null || uri.getPath() == null || !isConsultationOrEntryPath(uri.getPath())) {
+            return uri;
+        }
+        if (PATH_CANONICAL.equals(uri.getPath())) {
+            return uri;
+        }
+        StringBuilder sb = new StringBuilder()
+            .append(uri.getScheme()).append("://").append(uri.getHost());
+        if (uri.getPort() != -1) {
+            sb.append(':').append(uri.getPort());
+        }
+        sb.append(PATH_CANONICAL);
+        if (uri.getRawQuery() != null) {
+            sb.append('?').append(uri.getRawQuery());
+        }
+        return URI.create(sb.toString());
     }
 
     /**
@@ -70,7 +119,7 @@ public class SaoPauloNfceQrCodeValidator {
         if (uri.getRawUserInfo() != null) {
             throw new InvalidQrCodeUrlException();
         }
-        if (uri.getPath() == null || !PATH.equals(uri.getPath().toLowerCase(Locale.ROOT))) {
+        if (!isConsultationOrEntryPath(uri.getPath())) {
             throw new InvalidQrCodeUrlException();
         }
 

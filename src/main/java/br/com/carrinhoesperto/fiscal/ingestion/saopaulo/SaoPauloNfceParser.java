@@ -55,6 +55,8 @@ public class SaoPauloNfceParser {
     private static final Pattern CODE = Pattern.compile("[Cc][oó]digo\\s*:?\\s*([\\w.\\-/]+)");
     private static final Pattern CNPJ = Pattern.compile("(\\d{2}\\.?\\d{3}\\.?\\d{3}/?\\d{4}-?\\d{2})");
     private static final Pattern NUMERIC_TOKEN = Pattern.compile("\\d[\\d.,]*");
+    /** A value after Brazilian→plain normalisation: optional sign, digits, optional single fraction. */
+    private static final Pattern PLAIN_DECIMAL = Pattern.compile("-?\\d+(?:\\.\\d+)?");
 
     /**
      * @param html      raw consultation-page bytes (charset auto-detected)
@@ -176,6 +178,11 @@ public class SaoPauloNfceParser {
         BigDecimal payable = null;
 
         for (Element div : block.select("div")) {
+            // jsoup's select() can return the context element itself; the total
+            // rows are its children, never the block.
+            if (div == block) {
+                continue;
+            }
             Element numb = div.selectFirst("span.totalNumb");
             if (numb == null) {
                 continue;
@@ -261,14 +268,21 @@ public class SaoPauloNfceParser {
             return payments;
         }
         for (Element div : block.select("div")) {
+            if (div == block) {
+                continue;
+            }
             Element txLabel = div.selectFirst("label.tx");
             Element numb = div.selectFirst("span.totalNumb");
             if (txLabel == null || numb == null) {
                 continue;
             }
             String method = collapse(txLabel.text());
+            String methodKey = deaccent(method).toLowerCase(Locale.ROOT);
+            // "Troco" is change given back, not a payment line (and the page
+            // renders it as "NaN" when there is none).
             if (method.isEmpty()
-                    || deaccent(method).toLowerCase(Locale.ROOT).contains("valor pago")) {
+                    || methodKey.contains("valor pago")
+                    || methodKey.contains("troco")) {
                 continue;
             }
             BigDecimal amount = money(numb.text());
@@ -313,7 +327,14 @@ public class SaoPauloNfceParser {
         return m.find() ? money(m.group()) : null;
     }
 
-    /** Brazilian money/quantity string → {@link BigDecimal} ({@code "1.234,56"} → {@code 1234.56}). */
+    /**
+     * Brazilian money/quantity string → {@link BigDecimal} ({@code "1.234,56"} →
+     * {@code 1234.56}). Returns {@code null} for anything that is not a plain
+     * number after normalisation — e.g. the literal {@code "NaN"} the SEFAZ page
+     * renders for an absent "Troco", an empty cell, or a stray non-numeric token.
+     * A missing <em>required</em> value is caught later by the field-level
+     * {@code item-fields}/{@code totals-payable} checks, with a clearer reason.
+     */
     private static BigDecimal money(String raw) {
         if (raw == null) {
             return null;
@@ -323,13 +344,13 @@ public class SaoPauloNfceParser {
             .replaceAll("\\s", "")
             .replace(".", "")
             .replace(",", ".");
-        if (s.isEmpty() || s.equals("-") || s.equals(".")) {
+        if (!PLAIN_DECIMAL.matcher(s).matches()) {
             return null;
         }
         try {
             return new BigDecimal(s);
         } catch (NumberFormatException e) {
-            throw new NfceParseException("number-format");
+            return null;
         }
     }
 

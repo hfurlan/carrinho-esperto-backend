@@ -25,7 +25,11 @@ import java.util.Locale;
  *   <li>the target URL is re-validated against the allow-list on every call
  *       ({@link SaoPauloNfceQrCodeValidator#extractAccessKey});</li>
  *   <li>the host is checked not to resolve to a private/loopback address;</li>
- *   <li>redirects are never followed;</li>
+ *   <li>the HTTP client never auto-follows redirects; at most <strong>one</strong>
+ *       redirect is followed manually, and only when its {@code Location} is
+ *       itself an allow-listed SEFAZ-SP consultation URL that is re-checked for a
+ *       public address (SEFAZ 302-redirects a lower-cased path to its canonical
+ *       casing);</li>
  *   <li>connect and read timeouts are always set — no indefinite waits;</li>
  *   <li>the response body is read up to a hard byte cap;</li>
  *   <li>nothing from the response body is logged.</li>
@@ -60,12 +64,52 @@ public class SefazSpHttpClient {
      * @throws SefazUnexpectedResponseException redirect, other non-200 status, wrong content type, or oversized body
      */
     public byte[] fetch(URI uri) {
+        HttpResponse<InputStream> response = requestAllowListed(uri);
+
+        // SEFAZ 302-redirects a lower-cased path to its canonical casing. Follow
+        // that once — and only to another allow-listed SEFAZ-SP consultation URL.
+        if (isRedirect(response.statusCode())) {
+            URI location = redirectTarget(uri, response);
+            drainQuietly(response);
+            if (!validator.isSaoPauloConsultationUrl(location)) {
+                log.warn("SEFAZ-SP redirect points off the allow-list: {}", location);
+                throw new SefazUnexpectedResponseException("redirect-off-allowlist");
+            }
+            log.info("SEFAZ-SP following one redirect -> {}", location);
+            response = requestAllowListed(location);
+            if (isRedirect(response.statusCode())) {
+                log.warn("SEFAZ-SP redirected again (status {})", response.statusCode());
+                throw new SefazUnexpectedResponseException("redirect-loop:" + response.statusCode());
+            }
+        }
+
+        String contentType = response.headers().firstValue("Content-Type").orElse("");
+        if (response.statusCode() != 200) {
+            log.warn("SEFAZ-SP consultation returned status {} (content-type={})",
+                response.statusCode(), contentType);
+        }
+        checkStatus(response.statusCode());
+        checkContentType(contentType);
+
+        try (InputStream body = response.body()) {
+            byte[] bytes = readLimited(body, properties.maxResponseBytes());
+            log.info("SEFAZ-SP consultation fetched {} bytes (content-type={})", bytes.length, contentType);
+            return bytes;
+        } catch (IOException e) {
+            log.warn("SEFAZ-SP consultation body read failed");
+            throw new SefazUnavailableException("body-read");
+        }
+    }
+
+    /** Validates {@code uri} against the allow-list + public-address check, then GETs it once. */
+    private HttpResponse<InputStream> requestAllowListed(URI uri) {
         // Defense in depth: even though the provider already validated, never let
         // this client be pointed at an arbitrary or internal address.
         validator.extractAccessKey(uri);
         try {
             validator.assertHostResolvesToPublicAddress(uri);
         } catch (UnknownHostException e) {
+            log.warn("SEFAZ-SP consultation host did not resolve: {}", uri.getHost());
             throw new SefazUnavailableException("dns");
         }
 
@@ -76,9 +120,11 @@ public class SefazSpHttpClient {
             .GET()
             .build();
 
-        HttpResponse<InputStream> response;
+        log.info("SEFAZ-SP GET {} (connectTimeout={}, readTimeout={})",
+            uri, properties.connectTimeout(), properties.readTimeout());
+
         try {
-            response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            return httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
         } catch (HttpTimeoutException e) {
             log.warn("SEFAZ-SP consultation timed out");
             throw new SefazUnavailableException("timeout");
@@ -89,14 +135,28 @@ public class SefazSpHttpClient {
             Thread.currentThread().interrupt();
             throw new SefazUnavailableException("interrupted");
         }
+    }
 
-        checkStatus(response.statusCode());
-        checkContentType(response.headers().firstValue("Content-Type").orElse(""));
+    private static boolean isRedirect(int status) {
+        return status >= 300 && status < 400;
+    }
 
+    private static URI redirectTarget(URI from, HttpResponse<InputStream> response) {
+        String location = response.headers().firstValue("Location")
+            .orElseThrow(() -> new SefazUnexpectedResponseException("redirect-no-location"));
+        try {
+            URI target = URI.create(location);
+            return target.isAbsolute() ? target : from.resolve(target);
+        } catch (IllegalArgumentException e) {
+            throw new SefazUnexpectedResponseException("redirect-bad-location");
+        }
+    }
+
+    private static void drainQuietly(HttpResponse<InputStream> response) {
         try (InputStream body = response.body()) {
-            return readLimited(body, properties.maxResponseBytes());
-        } catch (IOException e) {
-            throw new SefazUnavailableException("body-read");
+            body.readAllBytes();
+        } catch (IOException ignored) {
+            // best effort — we are discarding a redirect's body
         }
     }
 
@@ -117,6 +177,7 @@ public class SefazSpHttpClient {
     private static void checkContentType(String contentType) {
         if (!contentType.isBlank()
                 && !contentType.toLowerCase(Locale.ROOT).contains("text/html")) {
+            log.warn("SEFAZ-SP consultation returned unexpected content-type: {}", contentType);
             throw new SefazUnexpectedResponseException("content-type");
         }
     }
@@ -128,6 +189,7 @@ public class SefazSpHttpClient {
         int read;
         while ((read = in.read(chunk)) != -1) {
             if (buffer.size() + read > maxBytes) {
+                log.warn("SEFAZ-SP consultation body exceeded {} bytes", maxBytes);
                 throw new SefazUnexpectedResponseException("body-too-large");
             }
             buffer.write(chunk, 0, read);

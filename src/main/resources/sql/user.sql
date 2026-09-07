@@ -1,8 +1,8 @@
 -- SQL for UserRepository, loaded through ELSQL (see config/ElSqlConfiguration).
 
 @NAME(insertUserIfAbsent)
-  INSERT INTO app_user (cognito_subject)
-  VALUES (:cognitoSubject)
+  INSERT INTO app_user (cognito_subject, kind)
+  VALUES (:cognitoSubject, 'AUTHENTICATED')
   ON CONFLICT (cognito_subject) DO NOTHING
 
 -- Keep the display handle (Cognito `username` claim) current. No-op when

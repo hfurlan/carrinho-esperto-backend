@@ -4,12 +4,14 @@ import br.com.carrinhoesperto.fiscal.dto.FiscalDocumentRequest;
 import br.com.carrinhoesperto.fiscal.dto.FiscalItemRequest;
 import br.com.carrinhoesperto.fiscal.dto.FiscalPaymentRequest;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
 import java.math.BigDecimal;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * Unit tests for {@link SaoPauloNfceParser} against the sanitized production
@@ -136,5 +138,56 @@ class SaoPauloNfceParserTest {
         // Sanity: nothing consumer-shaped leaks into the structured request.
         FiscalDocumentRequest doc = parse();
         assertThat(doc.toString()).doesNotContain("CONSUMIDOR DE TESTE").doesNotContain("000.000.000-00");
+    }
+
+    /**
+     * A full, current capture of the same receipt straight from SEFAZ-SP
+     * (sanitized only for CPF). It differs from the trimmed fixture above by
+     * carrying the extra markup the live page emits — notably a
+     * {@code <label class="tx">Troco</label><span class="totalNumb">NaN</span>}
+     * row, which used to blow up number parsing.
+     */
+    @Nested
+    class AgainstAFullLiveCapture {
+
+        private byte[] live;
+
+        {
+            try (InputStream in = SaoPauloNfceParserTest.class.getResourceAsStream(
+                    "/fixtures/nfce/sao-paulo-consulta-qrcode-live-troco-nan.html")) {
+                assertThat(in).isNotNull();
+                live = in.readAllBytes();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        @Test
+        void parsesWithoutChokingOnTheNaNTrocoRow() {
+            assertThatCode(() -> parser.parse(live, ACCESS_KEY)).doesNotThrowAnyException();
+        }
+
+        @Test
+        void extractsTheSameFiscalTruthAsTheTrimmedFixture() {
+            FiscalDocumentRequest doc = parser.parse(live, ACCESS_KEY);
+
+            assertThat(doc.documentNumber()).isEqualTo(117216L);
+            assertThat(doc.series()).isEqualTo(8);
+            assertThat(doc.issuedAt()).isEqualTo("2026-09-06T14:57:04-03:00");
+            assertThat(doc.issuer().cnpj()).isEqualTo("00371046000117");
+            assertThat(doc.totalItemsAmount()).isEqualByComparingTo("328.11");
+            assertThat(doc.totalDiscount()).isEqualByComparingTo("12.88");
+            assertThat(doc.totalAmount()).isEqualByComparingTo("315.23");
+            assertThat(doc.items()).hasSize(22);
+        }
+
+        @Test
+        void doesNotTreatTrocoAsAPayment() {
+            var payments = parser.parse(live, ACCESS_KEY).payments();
+
+            assertThat(payments).extracting(FiscalPaymentRequest::method)
+                .containsExactly("Cartão de Débito", "Cartão de Crédito");
+            assertThat(payments).noneMatch(p -> p.method().toLowerCase().contains("troco"));
+        }
     }
 }

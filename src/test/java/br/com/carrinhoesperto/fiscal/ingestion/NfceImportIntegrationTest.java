@@ -8,6 +8,7 @@ import br.com.carrinhoesperto.fiscal.ingestion.dto.NfceImportRequest;
 import br.com.carrinhoesperto.fiscal.ingestion.saopaulo.SefazSpHttpClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
@@ -203,6 +204,26 @@ class NfceImportIntegrationTest extends AbstractAuthenticatedIntegrationTest {
         assertThat(importStatus(validAccessToken(), "not a url")).isEqualTo(400);
         assertThat(importStatus(validAccessToken(),
             "https://www.nfce.fazenda.sp.gov.br/outra/pagina.aspx?p=" + ACCESS_KEY + "%7C2")).isEqualTo(422);
+    }
+
+    @Test
+    void acceptsAQrUrlWithLiteralPipeSeparators() {
+        // Real São Paulo NFC-e QR codes use literal `|` in the `p=` parameter.
+        String rawPipes = QR_URL.replace("%7C", "|");
+        assertThat(importStatus(validAccessToken(), rawPipes)).isEqualTo(201);
+    }
+
+    @Test
+    void importsFromTheShortQrCodeEntryUrlAndFetchesTheConsultationPage() {
+        String shortUrl = "https://www.nfce.fazenda.sp.gov.br/qrcode?p=" + ACCESS_KEY
+            + "%7C2%7C1%7C1%7C16AA3D2FF0C03038550613411FF3B328615A3F80";
+
+        assertThat(importStatus(validAccessToken(), shortUrl)).isEqualTo(201);
+
+        ArgumentCaptor<java.net.URI> fetched = ArgumentCaptor.forClass(java.net.URI.class);
+        verify(sefazSpHttpClient).fetch(fetched.capture());
+        assertThat(fetched.getValue().getPath().toLowerCase())
+            .isEqualTo("/nfceconsultapublica/paginas/consultaqrcode.aspx");
     }
 
     @Test

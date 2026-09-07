@@ -1,6 +1,7 @@
 package br.com.carrinhoesperto.service;
 
 import br.com.carrinhoesperto.config.AuthenticatedUser;
+import br.com.carrinhoesperto.config.CurrentCaller;
 import br.com.carrinhoesperto.model.User;
 import br.com.carrinhoesperto.repository.UserRepository;
 import org.springframework.stereotype.Service;
@@ -21,10 +22,12 @@ public class UserService {
 
     private final UserRepository userRepository;
     private final AuthenticatedUser authenticatedUser;
+    private final CurrentCaller currentCaller;
 
-    UserService(UserRepository userRepository, AuthenticatedUser authenticatedUser) {
+    UserService(UserRepository userRepository, AuthenticatedUser authenticatedUser, CurrentCaller currentCaller) {
         this.userRepository = userRepository;
         this.authenticatedUser = authenticatedUser;
+        this.currentCaller = currentCaller;
     }
 
     /**
@@ -45,17 +48,16 @@ public class UserService {
     }
 
     /**
-     * The local user id for the authenticated caller, read-only. The user is
-     * always already provisioned by {@code UserProvisioningFilter} on the way in,
-     * so this never has to write — callers inside a read-only transaction can use
-     * it safely.
+     * The owner {@code app_user.id} for the current request, read-only.
+     *
+     * <p>Delegates to {@link CurrentCaller}, which resolves either a validated
+     * Cognito identity (provisioned by {@code UserProvisioningFilter} on the way
+     * in, so this never has to write) or an anonymous trial session (M006.1).
+     * Every owner-scoped query keys on this id, so both kinds of caller are
+     * scoped identically.
      */
     @Transactional(readOnly = true)
     public UUID currentUserId() {
-        String cognitoSubject = authenticatedUser.cognitoSubject();
-        return userRepository.findByCognitoSubject(cognitoSubject)
-            .map(User::id)
-            .orElseThrow(() -> new IllegalStateException(
-                "No local user for the authenticated subject; provisioning did not run"));
+        return currentCaller.ownerUserId();
     }
 }

@@ -13,6 +13,8 @@ import br.com.carrinhoesperto.fiscal.ingestion.SefazUnexpectedResponseException;
 import br.com.carrinhoesperto.fiscal.ingestion.UnsupportedNfceProviderException;
 import br.com.carrinhoesperto.resolution.FiscalItemNotFoundException;
 import br.com.carrinhoesperto.resolution.ResolutionNotFoundException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -29,6 +31,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ProblemDetail onValidation(IllegalArgumentException exception) {
@@ -49,28 +53,33 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler({InvalidQrCodeUrlException.class, InvalidQrPayloadException.class})
     public ProblemDetail onInvalidQrCode(RuntimeException exception) {
+        log.warn("nfce import -> 400 invalid QR code/payload: {}", exception.getMessage());
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, exception.getMessage());
     }
 
     @ExceptionHandler(UnsupportedNfceProviderException.class)
     public ProblemDetail onUnsupportedProvider(UnsupportedNfceProviderException exception) {
+        log.warn("nfce import -> 422 unsupported provider: {}", exception.getMessage());
         return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, exception.getMessage());
     }
 
     @ExceptionHandler(SefazUnavailableException.class)
     public ProblemDetail onSefazUnavailable(SefazUnavailableException exception) {
+        log.warn("nfce import -> 502 SEFAZ-SP unavailable (reason={})", exception.getMessage());
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY,
             "The São Paulo NFC-e consultation service is currently unavailable. Try again later.");
     }
 
     @ExceptionHandler(SefazUnexpectedResponseException.class)
     public ProblemDetail onSefazUnexpectedResponse(SefazUnexpectedResponseException exception) {
+        log.warn("nfce import -> 502 SEFAZ-SP unexpected response (reason={})", exception.getMessage());
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY,
             "The São Paulo NFC-e consultation returned an unexpected response.");
     }
 
     @ExceptionHandler(NfceParseException.class)
     public ProblemDetail onNfceParseFailure(NfceParseException exception) {
+        log.warn("nfce import -> 502 SEFAZ-SP page could not be parsed (reason={})", exception.getMessage());
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY,
             "The São Paulo NFC-e consultation page could not be read.");
     }

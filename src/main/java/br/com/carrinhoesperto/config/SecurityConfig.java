@@ -5,6 +5,7 @@ import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.web.cors.CorsConfiguration;
@@ -21,9 +22,11 @@ import org.springframework.security.oauth2.jwt.JwtIssuerValidator;
 import org.springframework.security.oauth2.jwt.JwtTimestampValidator;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 
+import br.com.carrinhoesperto.session.AnonymousSessionService;
 import br.com.carrinhoesperto.service.UserService;
 
 /**
@@ -43,7 +46,7 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtDecoder jwtDecoder,
-            UserService userService) throws Exception {
+            UserService userService, AnonymousSessionService anonymousSessionService) throws Exception {
         JwtAuthenticationConverter authenticationConverter = new JwtAuthenticationConverter();
         authenticationConverter.setJwtGrantedAuthoritiesConverter(new CognitoGroupsAuthoritiesConverter());
 
@@ -53,17 +56,28 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health").permitAll()
+                // Start an anonymous trial session (M006.1). The only
+                // unauthenticated write; returns a one-time X-Anon-Session token.
+                .requestMatchers(HttpMethod.POST, "/api/anonymous-sessions").permitAll()
                 // Admin inspection surface (M006). ROLE_<GROUP> comes from the
                 // Cognito `cognito:groups` claim via CognitoGroupsAuthoritiesConverter;
-                // `admin` is the configured group (cognito.admin-group).
+                // `admin` is the configured group (cognito.admin-group). An
+                // anonymous trial caller only holds ROLE_TRIAL, so it gets 403 here.
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt
                 .decoder(jwtDecoder)
                 .jwtAuthenticationConverter(authenticationConverter)))
+            // Anonymous trial (M006.1): authenticate a valid X-Anon-Session token
+            // into the context before the bearer-token filter runs. A real
+            // Cognito bearer token always wins; an unknown token is left
+            // unauthenticated (→ 401), never silently downgraded.
+            .addFilterBefore(new TrialSessionAuthenticationFilter(anonymousSessionService),
+                BearerTokenAuthenticationFilter.class)
             // After authentication + authorization: mirror the validated Cognito
-            // identity into a local app_user row (idempotent).
+            // identity into a local app_user row (idempotent). No-op for an
+            // anonymous trial caller (its app_user row already exists).
             .addFilterAfter(new UserProvisioningFilter(userService), AuthorizationFilter.class);
         return http.build();
     }
@@ -98,7 +112,7 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(properties.allowedOrigins());
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Anon-Session"));
         config.setAllowCredentials(false);
         config.setMaxAge(3600L);
 

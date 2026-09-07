@@ -31,6 +31,28 @@ class SaoPauloNfceQrCodeValidatorTest {
     }
 
     @Test
+    void acceptsTheShortQrCodeEntryPathAndCanonicalisesIt() {
+        // Current São Paulo NFC-e QR codes print the short /qrcode entry point.
+        URI entry = URI.create(
+            "https://www.nfce.fazenda.sp.gov.br/qrcode?p=" + KEY + "%7C2%7C1%7C1%7CABC");
+
+        assertThat(validator.isSaoPauloConsultationUrl(entry)).isTrue();
+        assertThat(validator.extractAccessKey(entry)).isEqualTo(KEY);
+
+        URI canonical = validator.canonicalConsultationUri(entry);
+        assertThat(canonical.getPath().toLowerCase())
+            .isEqualTo("/nfceconsultapublica/paginas/consultaqrcode.aspx");
+        assertThat(canonical.getRawQuery()).isEqualTo("p=" + KEY + "%7C2%7C1%7C1%7CABC");
+        assertThat(validator.extractAccessKey(canonical)).isEqualTo(KEY);
+    }
+
+    @Test
+    void leavesAFullConsultationUrlUnchangedWhenCanonicalising() {
+        URI uri = URI.create(REFERENCE_URL);
+        assertThat(validator.canonicalConsultationUri(uri)).isEqualTo(uri);
+    }
+
+    @Test
     void rejectsPlainHttp() {
         URI uri = URI.create(REFERENCE_URL.replace("https://", "http://"));
         // Host/path still match, so the provider is selected...
