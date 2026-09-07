@@ -34,3 +34,11 @@
   WHERE lower(canonical_name) LIKE lower(:pattern)
   ORDER BY canonical_name ASC
   LIMIT :limit
+
+@NAME(findRecent)
+  SELECT id, canonical_name, brand_id, manufacturer_id, category_id, subcategory_id,
+         product_family_id, gtin, package_quantity, package_unit, packaging_type,
+         created_at, updated_at
+  FROM product
+  ORDER BY created_at DESC
+  LIMIT :limit

@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -54,6 +55,19 @@ public class FiscalItemRepository {
     public List<FiscalItem> findAllByDocument(UUID fiscalDocumentId) {
         return jdbc.query(sql.getSql("findAllByDocument"),
             new MapSqlParameterSource("fiscalDocumentId", fiscalDocumentId), FiscalItemRepository::mapItem);
+    }
+
+    /**
+     * A single fiscal item, scoped to the authenticated owner via its parent
+     * document. Returns empty when the item does not exist or belongs to another
+     * user (the two are indistinguishable to the caller, so ownership is not leaked).
+     */
+    public Optional<FiscalItem> findByIdAndOwner(UUID id, UUID ownerUserId) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("id", id)
+            .addValue("ownerUserId", ownerUserId);
+        return jdbc.query(sql.getSql("findByIdAndOwner"), params, FiscalItemRepository::mapItem)
+            .stream().findFirst();
     }
 
     private static FiscalItem mapItem(ResultSet rs, int rowNum) throws SQLException {

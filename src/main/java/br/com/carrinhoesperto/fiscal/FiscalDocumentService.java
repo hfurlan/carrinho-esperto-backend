@@ -156,6 +156,32 @@ public class FiscalDocumentService {
             .map(document -> loadDetail(document.id(), ownerId));
     }
 
+    /**
+     * A single {@link FiscalItem} owned by the authenticated caller (ownership is
+     * enforced through the parent document). Read-only application-level port for
+     * the Resolution context (M005) — Resolution reads the fiscal item's
+     * identifiers by id and never copies or persists the Fiscal aggregate.
+     * Empty when the item does not exist or is not the caller's.
+     */
+    @Transactional(readOnly = true)
+    public Optional<FiscalItem> findOwnedFiscalItem(UUID fiscalItemId) {
+        return fiscalItemRepository.findByIdAndOwner(fiscalItemId, userService.currentUserId());
+    }
+
+    /**
+     * Full document detail by id, <strong>not</strong> owner-scoped. Only for the
+     * ROLE_ADMIN-gated {@code /api/admin/**} surface (M006).
+     */
+    @Transactional(readOnly = true)
+    public FiscalDocumentResponse findByIdForAdmin(UUID documentId) {
+        FiscalDocument document = fiscalDocumentRepository.findByIdForAdmin(documentId)
+            .orElseThrow(() -> new FiscalDocumentNotFoundException(documentId));
+        return FiscalDocumentResponse.from(
+            document,
+            fiscalItemRepository.findAllByDocument(documentId),
+            fiscalPaymentRepository.findAllByDocument(documentId));
+    }
+
     private FiscalDocumentResponse loadDetail(UUID documentId, UUID ownerId) {
         FiscalDocument document = fiscalDocumentRepository.findByIdAndOwner(documentId, ownerId)
             .orElseThrow(() -> new FiscalDocumentNotFoundException(documentId));

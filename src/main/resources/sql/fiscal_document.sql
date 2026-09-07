@@ -36,6 +36,16 @@
   WHERE access_key = :accessKey
     AND owner_user_id = :ownerUserId
 
+-- Administrative lookup (M006): any document, regardless of owner. Only reached
+-- through /api/admin/** which is gated to ROLE_ADMIN.
+@NAME(findByIdForAdmin)
+  SELECT
+      id, owner_user_id, access_key, document_number, series, issued_at,
+      issuer_cnpj, issuer_legal_name, issuer_trade_name, issuer_address,
+      total_amount, total_items_amount, total_discount, created_at
+  FROM fiscal_document
+  WHERE id = :id
+
 @NAME(findAllByOwner)
   SELECT
       d.id, d.owner_user_id, d.access_key, d.document_number, d.series, d.issued_at,

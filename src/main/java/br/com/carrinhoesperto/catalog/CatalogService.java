@@ -239,6 +239,13 @@ public class CatalogService {
         return productRepository.searchByName(q).stream().map(ProductResponse::from).toList();
     }
 
+    /** Most recently created products first, capped at {@code limit}. Admin inspection (M006). */
+    @Transactional(readOnly = true)
+    public List<ProductResponse> listRecentProducts(int limit) {
+        return productRepository.findRecent(Math.max(1, Math.min(limit, 500)))
+            .stream().map(ProductResponse::from).toList();
+    }
+
     // ── loaders ────────────────────────────────────────────────────────────
 
     private Manufacturer loadManufacturer(UUID id) {

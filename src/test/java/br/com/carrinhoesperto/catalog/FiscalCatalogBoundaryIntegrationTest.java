@@ -110,13 +110,23 @@ class FiscalCatalogBoundaryIntegrationTest extends AbstractAuthenticatedIntegrat
     }
 
     @Test
-    void noResolutionTablesExistYet() {
+    void resolutionOwnsTheLinkAndNeitherSourceContextReferencesIt() {
+        // M005 added product_resolution / resolution_evidence — the link lives in
+        // the Resolution context. The Fiscal <-> Catalog boundary is unchanged:
+        // no FK column joins fiscal_item to product or to a resolution, and no
+        // store-vocabulary tables exist yet.
         List<String> tables = jdbcTemplate.queryForList(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
             String.class);
         assertThat(tables)
-            .contains("fiscal_document", "fiscal_item", "product")
-            .doesNotContain("product_resolution", "resolution", "resolution_evidence",
-                "store_product_code", "store_product_alias");
+            .contains("fiscal_document", "fiscal_item", "product",
+                "product_resolution", "resolution_evidence")
+            .doesNotContain("store_product_code", "store_product_alias", "store_vocabulary");
+
+        List<String> productColumns = jdbcTemplate.queryForList(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'product'",
+            String.class);
+        assertThat(productColumns)
+            .doesNotContain("fiscal_item_id", "resolution_id", "user_id", "owner_user_id");
     }
 }

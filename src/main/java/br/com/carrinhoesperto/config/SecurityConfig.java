@@ -53,6 +53,10 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health").permitAll()
+                // Admin inspection surface (M006). ROLE_<GROUP> comes from the
+                // Cognito `cognito:groups` claim via CognitoGroupsAuthoritiesConverter;
+                // `admin` is the configured group (cognito.admin-group).
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt

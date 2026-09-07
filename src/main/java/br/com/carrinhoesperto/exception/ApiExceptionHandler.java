@@ -11,6 +11,8 @@ import br.com.carrinhoesperto.fiscal.ingestion.NfceParseException;
 import br.com.carrinhoesperto.fiscal.ingestion.SefazUnavailableException;
 import br.com.carrinhoesperto.fiscal.ingestion.SefazUnexpectedResponseException;
 import br.com.carrinhoesperto.fiscal.ingestion.UnsupportedNfceProviderException;
+import br.com.carrinhoesperto.resolution.FiscalItemNotFoundException;
+import br.com.carrinhoesperto.resolution.ResolutionNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -88,5 +90,14 @@ public class ApiExceptionHandler {
     @ExceptionHandler(GtinAlreadyAssignedException.class)
     public ProblemDetail onGtinAlreadyAssigned(GtinAlreadyAssignedException exception) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, exception.getMessage());
+    }
+
+    // ── Resolution (M005) ──────────────────────────────────────────────────
+    // NOTE: an UNRESOLVED resolution is a normal 200/201 result, not an error —
+    // it is never mapped here.
+
+    @ExceptionHandler({FiscalItemNotFoundException.class, ResolutionNotFoundException.class})
+    public ProblemDetail onResolutionNotFound(RuntimeException exception) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
     }
 }

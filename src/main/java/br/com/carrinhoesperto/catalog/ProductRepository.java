@@ -73,6 +73,12 @@ public class ProductRepository {
         return jdbc.query(sql.getSql("searchByName"), params, ProductRepository::map);
     }
 
+    /** Most recently created products first, capped at {@code limit}. Admin inspection (M006). */
+    public List<Product> findRecent(int limit) {
+        return jdbc.query(sql.getSql("findRecent"),
+            new MapSqlParameterSource("limit", limit), ProductRepository::map);
+    }
+
     private static Product map(ResultSet rs, int rowNum) throws SQLException {
         String unit = rs.getString("package_unit");
         String packaging = rs.getString("packaging_type");

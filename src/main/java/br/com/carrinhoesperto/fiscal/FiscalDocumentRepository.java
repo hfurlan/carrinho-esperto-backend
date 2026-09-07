@@ -82,6 +82,14 @@ public class FiscalDocumentRepository {
             .findFirst();
     }
 
+    /** Any document by id, regardless of owner. Admin-only path (see FiscalDocumentService). */
+    public Optional<FiscalDocument> findByIdForAdmin(UUID id) {
+        return jdbc.query(sql.getSql("findByIdForAdmin"),
+                new MapSqlParameterSource("id", id), FiscalDocumentRepository::mapDocument)
+            .stream()
+            .findFirst();
+    }
+
     public List<Summary> findAllByOwner(UUID ownerUserId) {
         return jdbc.query(sql.getSql("findAllByOwner"),
             new MapSqlParameterSource("ownerUserId", ownerUserId), FiscalDocumentRepository::mapSummary);
