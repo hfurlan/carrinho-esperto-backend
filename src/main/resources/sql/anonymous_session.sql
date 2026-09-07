@@ -21,3 +21,16 @@
      SET last_seen_at = now()
    WHERE id = :id
      AND kind = 'ANONYMOUS'
+
+-- M006.2 account claim: hand the trial session's receipts to a real account,
+-- then drop the anonymous app_user row. Ownership stays keyed on
+-- fiscal_document.owner_user_id, so nothing else changes.
+@NAME(reassignFiscalDocuments)
+  UPDATE fiscal_document
+     SET owner_user_id = :targetUserId
+   WHERE owner_user_id = :anonUserId
+
+@NAME(deleteAnonymousUser)
+  DELETE FROM app_user
+   WHERE id = :anonUserId
+     AND kind = 'ANONYMOUS'

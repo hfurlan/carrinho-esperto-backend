@@ -76,6 +76,31 @@ public class AnonymousSessionService {
         repository.touchLastSeen(appUserId);
     }
 
+    /**
+     * Hands the receipts of the anonymous session identified by {@code rawToken}
+     * to {@code targetUserId} (a real account, M006.2), then removes the
+     * anonymous {@code app_user} row.
+     *
+     * <p>No-op when the token is absent/unknown or already resolves to
+     * {@code targetUserId}. The caller can only ever affect the session whose
+     * token it presents.
+     *
+     * @return the number of receipts moved
+     */
+    @Transactional
+    public int claimInto(String rawToken, UUID targetUserId) {
+        Optional<UUID> anon = resolve(rawToken);
+        if (anon.isEmpty() || anon.get().equals(targetUserId)) {
+            return 0;
+        }
+        UUID anonUserId = anon.get();
+        int moved = repository.reassignFiscalDocuments(anonUserId, targetUserId);
+        repository.deleteAnonymousUser(anonUserId);
+        log.info("anonymous session claimed anonAppUserId={} targetAppUserId={} movedReceipts={}",
+            anonUserId, targetUserId, moved);
+        return moved;
+    }
+
     private static String sha256Hex(String value) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

@@ -54,4 +54,22 @@ public class AnonymousSessionRepository {
     public void touchLastSeen(UUID id) {
         jdbc.update(sql.getSql("touchLastSeen"), new MapSqlParameterSource("id", id));
     }
+
+    /**
+     * Moves every fiscal document owned by the anonymous session to
+     * {@code targetUserId} (M006.2 account claim).
+     *
+     * @return the number of documents moved
+     */
+    public int reassignFiscalDocuments(UUID anonUserId, UUID targetUserId) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("anonUserId", anonUserId)
+            .addValue("targetUserId", targetUserId);
+        return jdbc.update(sql.getSql("reassignFiscalDocuments"), params);
+    }
+
+    /** Drops the anonymous {@code app_user} row after its data has been claimed. */
+    public void deleteAnonymousUser(UUID anonUserId) {
+        jdbc.update(sql.getSql("deleteAnonymousUser"), new MapSqlParameterSource("anonUserId", anonUserId));
+    }
 }

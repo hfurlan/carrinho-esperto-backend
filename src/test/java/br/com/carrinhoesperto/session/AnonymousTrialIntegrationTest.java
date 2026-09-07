@@ -213,4 +213,63 @@ class AnonymousTrialIntegrationTest extends AbstractAuthenticatedIntegrationTest
         String token = newAnonymousToken();
         assertThat(anonGetStatus("/api/fiscal-documents/" + UUID.randomUUID(), token)).isEqualTo(404);
     }
+
+    // ── Account claim (M006.2) ────────────────────────────────────────────────
+
+    @Test
+    void authenticatedCallerClaimsTheTrialReceiptsAndTheAnonSessionIsGone() {
+        String token = newAnonymousToken();
+        FiscalDocumentResponse trialDoc = importAsAnon(token);
+        assertThat(trialDoc).isNotNull();
+
+        br.com.carrinhoesperto.session.dto.ClaimResult result = client().post()
+            .uri("/api/anonymous-sessions/claim")
+            .headers(h -> h.setBearerAuth(validAccessToken()))
+            .header("X-Anon-Session", token)
+            .retrieve()
+            .body(br.com.carrinhoesperto.session.dto.ClaimResult.class);
+        assertThat(result).isNotNull();
+        assertThat(result.movedReceipts()).isEqualTo(1);
+
+        // Now owned by the authenticated user…
+        int authRead = client().get().uri("/api/fiscal-documents/{id}", trialDoc.id())
+            .headers(h -> h.setBearerAuth(validAccessToken()))
+            .exchange((req, res) -> res.getStatusCode().value());
+        assertThat(authRead).isEqualTo(200);
+
+        // …and the anonymous token no longer resolves to anything (row deleted).
+        assertThat(anonGetStatus("/api/fiscal-documents", token)).isEqualTo(401);
+    }
+
+    @Test
+    void claimWithoutATrialSessionHeaderMovesNothing() {
+        br.com.carrinhoesperto.session.dto.ClaimResult result = client().post()
+            .uri("/api/anonymous-sessions/claim")
+            .headers(h -> h.setBearerAuth(validAccessToken()))
+            .retrieve()
+            .body(br.com.carrinhoesperto.session.dto.ClaimResult.class);
+        assertThat(result.movedReceipts()).isZero();
+    }
+
+    @Test
+    void aTrialOnlyCallerCannotClaimIntoAnAccountItDoesNotHave() {
+        String token = newAnonymousToken();
+        importAsAnon(token);
+
+        br.com.carrinhoesperto.session.dto.ClaimResult result = client().post()
+            .uri("/api/anonymous-sessions/claim")
+            .header("X-Anon-Session", token)
+            .retrieve()
+            .body(br.com.carrinhoesperto.session.dto.ClaimResult.class);
+        assertThat(result.movedReceipts()).isZero();
+        // The trial session is untouched.
+        assertThat(anonGetStatus("/api/fiscal-documents", token)).isEqualTo(200);
+    }
+
+    @Test
+    void claimWithNoCredentialsAtAllIsUnauthorized() {
+        int status = client().post().uri("/api/anonymous-sessions/claim")
+            .exchange((req, res) -> res.getStatusCode().value());
+        assertThat(status).isEqualTo(401);
+    }
 }

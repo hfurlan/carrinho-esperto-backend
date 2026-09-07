@@ -30,7 +30,27 @@ class MeControllerIntegrationTest extends AbstractAuthenticatedIntegrationTest {
             .body(CurrentUserResponse.class);
 
         assertThat(body).isNotNull();
+        assertThat(body.authenticated()).isTrue();
         assertThat(body.subject()).isEqualTo(expectedSubject());
+    }
+
+    @Test
+    void describesAnAnonymousTrialCallerWithoutAn500() {
+        String token = client().post().uri("/api/anonymous-sessions")
+            .retrieve()
+            .body(br.com.carrinhoesperto.session.dto.AnonymousSessionResponse.class)
+            .token();
+
+        CurrentUserResponse body = client().get()
+            .uri("/api/me")
+            .header("X-Anon-Session", token)
+            .retrieve()
+            .body(CurrentUserResponse.class);
+
+        assertThat(body).isNotNull();
+        assertThat(body.authenticated()).isFalse();
+        assertThat(body.subject()).isNull();
+        assertThat(body.username()).isNull();
     }
 
     @Test
