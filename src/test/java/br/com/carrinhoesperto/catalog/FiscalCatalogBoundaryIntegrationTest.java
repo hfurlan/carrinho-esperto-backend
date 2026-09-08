@@ -111,17 +111,26 @@ class FiscalCatalogBoundaryIntegrationTest extends AbstractAuthenticatedIntegrat
 
     @Test
     void resolutionOwnsTheLinkAndNeitherSourceContextReferencesIt() {
-        // M005 added product_resolution / resolution_evidence — the link lives in
-        // the Resolution context. The Fiscal <-> Catalog boundary is unchanged:
-        // no FK column joins fiscal_item to product or to a resolution, and no
-        // store-vocabulary tables exist yet.
+        // The link lives in the Resolution context: product_resolution /
+        // resolution_evidence (M005) and, since M007, store_product_code — all
+        // Resolution-owned. The Fiscal <-> Catalog boundary is unchanged: no FK
+        // column joins fiscal_item to product or to a resolution; `product` has
+        // no owner/fiscal/resolution column; the store vocabulary is
+        // (store, cProd) only — no alias / EAV tables.
         List<String> tables = jdbcTemplate.queryForList(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
             String.class);
         assertThat(tables)
             .contains("fiscal_document", "fiscal_item", "product",
-                "product_resolution", "resolution_evidence")
-            .doesNotContain("store_product_code", "store_product_alias", "store_vocabulary");
+                "product_resolution", "resolution_evidence", "store_product_code")
+            .doesNotContain("store_product_alias", "store_vocabulary", "attribute_value");
+
+        List<String> storeCodeColumns = jdbcTemplate.queryForList(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'store_product_code'",
+            String.class);
+        assertThat(storeCodeColumns)
+            .contains("store_id", "code", "canonical_product_id")
+            .doesNotContain("user_id", "owner_user_id", "raw_description", "fiscal_item_id");
 
         List<String> productColumns = jdbcTemplate.queryForList(
             "SELECT column_name FROM information_schema.columns WHERE table_name = 'product'",

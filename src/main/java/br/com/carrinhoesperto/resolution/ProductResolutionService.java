@@ -1,7 +1,6 @@
 package br.com.carrinhoesperto.resolution;
 
 import br.com.carrinhoesperto.catalog.CatalogService;
-import br.com.carrinhoesperto.catalog.dto.ProductResponse;
 import br.com.carrinhoesperto.fiscal.FiscalDocumentService;
 import br.com.carrinhoesperto.fiscal.FiscalItem;
 import br.com.carrinhoesperto.fiscal.dto.FiscalDocumentResponse;
@@ -14,24 +13,28 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Application workflow for the Resolution bounded context (M005 §17).
+ * Application workflow for the Resolution bounded context (M005 §17, M007 §18).
  *
- * <p>Answers "which canonical catalog product, if any, does this user-owned
- * fiscal item refer to?" using <strong>deterministic exact-GTIN evidence
- * only</strong>. No description / fuzzy / price / brand / AI matching; no
- * automatic catalog creation.
+ * <p>Answers "which canonical catalog product, if any, does this fiscal item
+ * refer to?" by running the registered {@link ResolutionStrategy} beans in
+ * precedence order and taking the first deterministic match:
+ * <ol>
+ *   <li>{@link GtinExactResolutionStrategy} — exact GTIN (M005)</li>
+ *   <li>{@link StoreProductCodeResolutionStrategy} — curated {@code (store, cProd)} (M007)</li>
+ * </ol>
+ * GTIN always wins. No fuzzy / description / price / AI matching; no automatic
+ * catalog creation; no automatic learning of mappings.
  *
- * <p>Cross-context access is by id through the existing application services:
- * {@link FiscalDocumentService#findOwnedFiscalItem} (ownership-enforced read of
- * a user-owned fiscal item) and {@link CatalogService#findProductByGtin} (lookup
- * in the shared, platform-owned catalog). Resolution never modifies Fiscal or
- * Catalog data and never copies their aggregates.
+ * <p>Cross-context access is by id through the existing application services.
+ * Resolution never modifies Fiscal or Catalog data and never copies their
+ * aggregates.
  */
 @Service
 public class ProductResolutionService {
@@ -42,15 +45,20 @@ public class ProductResolutionService {
     private final CatalogService catalogService;
     private final ProductResolutionRepository resolutionRepository;
     private final ResolutionEvidenceRepository evidenceRepository;
+    private final List<ResolutionStrategy> strategies;
 
     ProductResolutionService(FiscalDocumentService fiscalDocumentService,
                              CatalogService catalogService,
                              ProductResolutionRepository resolutionRepository,
-                             ResolutionEvidenceRepository evidenceRepository) {
+                             ResolutionEvidenceRepository evidenceRepository,
+                             List<ResolutionStrategy> strategies) {
         this.fiscalDocumentService = fiscalDocumentService;
         this.catalogService = catalogService;
         this.resolutionRepository = resolutionRepository;
         this.evidenceRepository = evidenceRepository;
+        this.strategies = strategies.stream()
+            .sorted(Comparator.comparingInt(ResolutionStrategy::order))
+            .toList();
     }
 
     /**
@@ -64,38 +72,8 @@ public class ProductResolutionService {
     public ResolveOutcome resolveFiscalItem(UUID fiscalItemId) {
         FiscalItem item = fiscalDocumentService.findOwnedFiscalItem(fiscalItemId)
             .orElseThrow(() -> new FiscalItemNotFoundException(fiscalItemId));
-
-        Optional<String> gtin = selectGtin(item);
-        Optional<UUID> productId = gtin
-            .flatMap(catalogService::findProductByGtin)
-            .map(ProductResponse::id);
-
-        ResolutionStatus status = productId.isPresent() ? ResolutionStatus.RESOLVED : ResolutionStatus.UNRESOLVED;
-        ResolutionMethod method = productId.isPresent() ? ResolutionMethod.GTIN_EXACT : null;
-
-        Optional<ProductResolution> existing = resolutionRepository.findByFiscalItemId(fiscalItemId);
-        if (existing.isPresent()) {
-            ProductResolution current = existing.get();
-            boolean unchanged = current.status() == status
-                && Objects.equals(current.canonicalProductId(), productId.orElse(null))
-                && current.method() == method;
-            if (!unchanged) {
-                resolutionRepository.updateOutcome(current.id(), productId.orElse(null), status, method);
-                rewriteEvidence(current.id(), status, gtin.orElse(null));
-                log.info("resolution updated fiscalItemId={} status={} canonicalProductId={} method={}",
-                    fiscalItemId, status, productId.orElse(null), method);
-            }
-            return new ResolveOutcome(load(current.id()), false);
-        }
-
-        UUID resolutionId = UUID.randomUUID();
-        resolutionRepository.insert(resolutionId, fiscalItemId, productId.orElse(null), status, method);
-        if (status == ResolutionStatus.RESOLVED) {
-            insertGtinEvidence(resolutionId, gtin.orElseThrow());
-        }
-        log.info("resolution created fiscalItemId={} status={} canonicalProductId={} method={}",
-            fiscalItemId, status, productId.orElse(null), method);
-        return new ResolveOutcome(load(resolutionId), true);
+        String storeId = fiscalDocumentService.findStoreIdForFiscalItem(fiscalItemId).orElse(null);
+        return resolveItem(FiscalItemContext.from(item, storeId));
     }
 
     /**
@@ -132,6 +110,24 @@ public class ProductResolutionService {
     }
 
     /**
+     * Re-runs resolution for every item of any fiscal document (M007 §11) — the
+     * admin path after a store mapping is created. Same per-item logic and same
+     * response shape as {@link #resolveOwnedDocument}, but not owner-scoped.
+     *
+     * @throws br.com.carrinhoesperto.fiscal.FiscalDocumentNotFoundException no such document (404)
+     */
+    @Transactional
+    public List<DocumentItemResolutionResponse> resolveDocumentForAdmin(UUID documentId) {
+        FiscalDocumentResponse document = fiscalDocumentService.findByIdForAdmin(documentId);
+        String storeId = digitsOnly(document.issuer().cnpj());
+        List<DocumentItemResolutionResponse> views = new ArrayList<>(document.items().size());
+        for (FiscalItemResponse item : document.items()) {
+            views.add(view(resolveItem(FiscalItemContext.from(item, storeId)).resolution()));
+        }
+        return views;
+    }
+
+    /**
      * Reads the resolution state of every item of the caller's fiscal document
      * (M006). Items never resolved appear with {@code status = null}.
      *
@@ -150,6 +146,53 @@ public class ProductResolutionService {
         return views;
     }
 
+    // ── Core resolve, strategy-driven ──────────────────────────────────────
+
+    /**
+     * Runs the strategies in precedence order for one item and upserts its
+     * single resolution row. Evidence (one row) is rewritten only when the
+     * outcome actually changes — an unchanged re-resolve touches nothing.
+     */
+    private ResolveOutcome resolveItem(FiscalItemContext ctx) {
+        UUID fiscalItemId = ctx.fiscalItemId();
+
+        Optional<StrategyMatch> match = strategies.stream()
+            .map(s -> s.match(ctx))
+            .flatMap(Optional::stream)
+            .findFirst();
+
+        ResolutionStatus status = match.isPresent() ? ResolutionStatus.RESOLVED : ResolutionStatus.UNRESOLVED;
+        UUID productId = match.map(StrategyMatch::canonicalProductId).orElse(null);
+        ResolutionMethod method = match.map(StrategyMatch::method).orElse(null);
+        EvidenceRecord evidence = match.map(StrategyMatch::evidence).orElse(null);
+
+        Optional<ProductResolution> existing = resolutionRepository.findByFiscalItemId(fiscalItemId);
+        if (existing.isPresent()) {
+            ProductResolution current = existing.get();
+            boolean unchanged = current.status() == status
+                && Objects.equals(current.canonicalProductId(), productId)
+                && current.method() == method;
+            if (!unchanged) {
+                resolutionRepository.updateOutcome(current.id(), productId, status, method);
+                rewriteEvidence(current.id(), status, evidence);
+                log.info("resolution updated fiscalItemId={} status={} canonicalProductId={} method={}",
+                    fiscalItemId, status, productId, method);
+            }
+            return new ResolveOutcome(load(current.id()), false);
+        }
+
+        UUID resolutionId = UUID.randomUUID();
+        resolutionRepository.insert(resolutionId, fiscalItemId, productId, status, method);
+        if (status == ResolutionStatus.RESOLVED) {
+            insertEvidence(resolutionId, Objects.requireNonNull(evidence));
+        }
+        log.info("resolution created fiscalItemId={} status={} canonicalProductId={} method={}",
+            fiscalItemId, status, productId, method);
+        return new ResolveOutcome(load(resolutionId), true);
+    }
+
+    // ── Views / helpers ───────────────────────────────────────────────────
+
     private DocumentItemResolutionResponse view(ResolutionResponse res) {
         return new DocumentItemResolutionResponse(res.fiscalItemId(), res.status(),
             res.canonicalProductId(), canonicalNameOf(res.canonicalProductId()), res.method(), res.updatedAt());
@@ -166,16 +209,15 @@ public class ProductResolutionService {
             : catalogService.findProductById(canonicalProductId).canonicalName();
     }
 
-    private void rewriteEvidence(UUID resolutionId, ResolutionStatus status, String gtin) {
+    private void rewriteEvidence(UUID resolutionId, ResolutionStatus status, EvidenceRecord evidence) {
         evidenceRepository.deleteByResolutionId(resolutionId);
         if (status == ResolutionStatus.RESOLVED) {
-            insertGtinEvidence(resolutionId, Objects.requireNonNull(gtin));
+            insertEvidence(resolutionId, Objects.requireNonNull(evidence));
         }
     }
 
-    private void insertGtinEvidence(UUID resolutionId, String gtin) {
-        evidenceRepository.insert(UUID.randomUUID(), resolutionId,
-            ResolutionEvidenceType.GTIN, ResolutionEvidenceSource.FISCAL_ITEM, gtin);
+    private void insertEvidence(UUID resolutionId, EvidenceRecord e) {
+        evidenceRepository.insert(UUID.randomUUID(), resolutionId, e.type(), e.source(), e.value(), e.metadata());
     }
 
     private ResolutionResponse load(UUID resolutionId) {
@@ -186,16 +228,8 @@ public class ProductResolutionService {
         return ResolutionResponse.from(resolution, evidence);
     }
 
-    /**
-     * Fiscal GTIN selection rule (M005 §18): use {@code cEAN} when it is a usable
-     * canonical GTIN; otherwise fall back to {@code cEANTrib}. A {@code cEAN}
-     * that is a valid GTIN but matches no catalog product is still "used" — the
-     * result is {@code UNRESOLVED}, with no fall-through to {@code cEANTrib}.
-     * {@code "SEM GTIN"}, blank and non-numeric values are not usable.
-     */
-    private static Optional<String> selectGtin(FiscalItem item) {
-        Optional<String> primary = Gtin.canonical(item.gtin());
-        return primary.isPresent() ? primary : Gtin.canonical(item.gtinTaxable());
+    private static String digitsOnly(String raw) {
+        return raw == null ? null : raw.replaceAll("\\D", "");
     }
 
     /** The stored resolution plus whether this call created it (201) or it already existed (200). */

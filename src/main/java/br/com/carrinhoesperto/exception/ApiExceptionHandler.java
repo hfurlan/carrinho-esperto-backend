@@ -13,6 +13,8 @@ import br.com.carrinhoesperto.fiscal.ingestion.SefazUnexpectedResponseException;
 import br.com.carrinhoesperto.fiscal.ingestion.UnsupportedNfceProviderException;
 import br.com.carrinhoesperto.resolution.FiscalItemNotFoundException;
 import br.com.carrinhoesperto.resolution.ResolutionNotFoundException;
+import br.com.carrinhoesperto.resolution.StoreProductCodeConflictException;
+import br.com.carrinhoesperto.resolution.StoreProductCodeNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -108,5 +110,17 @@ public class ApiExceptionHandler {
     @ExceptionHandler({FiscalItemNotFoundException.class, ResolutionNotFoundException.class})
     public ProblemDetail onResolutionNotFound(RuntimeException exception) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
+    }
+
+    // ── Store vocabulary (M007) ────────────────────────────────────────────
+
+    @ExceptionHandler(StoreProductCodeNotFoundException.class)
+    public ProblemDetail onStoreProductCodeNotFound(StoreProductCodeNotFoundException exception) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
+    }
+
+    @ExceptionHandler(StoreProductCodeConflictException.class)
+    public ProblemDetail onStoreProductCodeConflict(StoreProductCodeConflictException exception) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, exception.getMessage());
     }
 }

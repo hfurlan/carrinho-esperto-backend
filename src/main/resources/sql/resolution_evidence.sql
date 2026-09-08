@@ -5,15 +5,15 @@
 -- outcome actually changes; an unchanged re-resolve touches nothing.
 
 @NAME(insert)
-  INSERT INTO resolution_evidence (id, resolution_id, type, source, value)
-  VALUES (:id, :resolutionId, :type, :source, :value)
+  INSERT INTO resolution_evidence (id, resolution_id, type, source, value, metadata)
+  VALUES (:id, :resolutionId, :type, :source, :value, :metadata)
 
 @NAME(deleteByResolutionId)
   DELETE FROM resolution_evidence
   WHERE resolution_id = :resolutionId
 
 @NAME(findByResolutionId)
-  SELECT id, resolution_id, type, source, value, created_at
+  SELECT id, resolution_id, type, source, value, metadata, created_at
   FROM resolution_evidence
   WHERE resolution_id = :resolutionId
   ORDER BY created_at ASC, id ASC

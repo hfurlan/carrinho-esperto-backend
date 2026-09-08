@@ -30,13 +30,14 @@ public class ResolutionEvidenceRepository {
     }
 
     public void insert(UUID id, UUID resolutionId, ResolutionEvidenceType type,
-                       ResolutionEvidenceSource source, String value) {
+                       ResolutionEvidenceSource source, String value, String metadata) {
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("resolutionId", resolutionId)
             .addValue("type", type.name())
             .addValue("source", source.name())
-            .addValue("value", value);
+            .addValue("value", value)
+            .addValue("metadata", metadata);
         jdbc.update(sql.getSql("insert"), params);
     }
 
@@ -57,6 +58,7 @@ public class ResolutionEvidenceRepository {
             ResolutionEvidenceType.valueOf(rs.getString("type")),
             ResolutionEvidenceSource.valueOf(rs.getString("source")),
             rs.getString("value"),
+            rs.getString("metadata"),
             instant(rs, "created_at"));
     }
 }

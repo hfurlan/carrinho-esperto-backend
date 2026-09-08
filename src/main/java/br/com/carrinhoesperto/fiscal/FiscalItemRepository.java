@@ -62,6 +62,13 @@ public class FiscalItemRepository {
      * document. Returns empty when the item does not exist or belongs to another
      * user (the two are indistinguishable to the caller, so ownership is not leaked).
      */
+    /** The issuing store's CNPJ (digits) for a fiscal item, or empty if the item does not exist. */
+    public Optional<String> findStoreIdByItemId(UUID id) {
+        return jdbc.query(sql.getSql("findStoreIdByItemId"), new MapSqlParameterSource("id", id),
+                (rs, rowNum) -> rs.getString("issuer_cnpj"))
+            .stream().findFirst();
+    }
+
     public Optional<FiscalItem> findByIdAndOwner(UUID id, UUID ownerUserId) {
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("id", id)

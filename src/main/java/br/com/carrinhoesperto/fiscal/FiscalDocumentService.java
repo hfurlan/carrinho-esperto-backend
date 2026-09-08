@@ -169,6 +169,16 @@ public class FiscalDocumentService {
     }
 
     /**
+     * The issuing store's CNPJ (digits) for a fiscal item — the store identity
+     * the Resolution context keys store vocabulary on (M007). Read-only
+     * application-level port; the CNPJ is public receipt data, not owner-scoped.
+     */
+    @Transactional(readOnly = true)
+    public Optional<String> findStoreIdForFiscalItem(UUID fiscalItemId) {
+        return fiscalItemRepository.findStoreIdByItemId(fiscalItemId);
+    }
+
+    /**
      * Full document detail by id, <strong>not</strong> owner-scoped. Only for the
      * ROLE_ADMIN-gated {@code /api/admin/**} surface (M006).
      */

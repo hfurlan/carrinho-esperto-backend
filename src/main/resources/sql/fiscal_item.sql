@@ -20,6 +20,15 @@
   WHERE fiscal_document_id = :fiscalDocumentId
   ORDER BY line_number ASC
 
+-- The issuing store's CNPJ for one fiscal item (M007). The issuer CNPJ is
+-- already public receipt data, so no owner filter here — callers either proved
+-- ownership first (consumer path) or are ROLE_ADMIN (re-resolution path).
+@NAME(findStoreIdByItemId)
+  SELECT d.issuer_cnpj
+  FROM fiscal_item i
+  JOIN fiscal_document d ON d.id = i.fiscal_document_id
+  WHERE i.id = :id
+
 -- Single item scoped by the authenticated owner (ownership is on the parent
 -- document). Used by the Resolution context to read a user-owned fiscal item
 -- without exposing cross-user fiscal data.
