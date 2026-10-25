@@ -1,0 +1,17 @@
+# Build
+target/
+*.class
+
+# Local generated env (created by infra/ministack/bootstrap.sh)
+infra/ministack/.cognito.env
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Claude Code — per-developer local overrides (shared config is .claude/settings.json)
+.claude/settings.local.json
+
+# OS
+.DS_Store

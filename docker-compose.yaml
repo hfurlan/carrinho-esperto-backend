@@ -1,0 +1,62 @@
+name: carrinho-esperto
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: carrinho_esperto
+      POSTGRES_USER: carrinho_esperto
+      POSTGRES_PASSWORD: carrinho_esperto
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U carrinho_esperto -d carrinho_esperto"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ministack:
+    image: ministackorg/ministack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      # Local AWS surface used by the app: Cognito for authentication. Add S3/SQS
+      # here (and to infra/ministack/bootstrap.sh) if the app later needs
+      # file storage or async processing.
+    healthcheck:
+      # The image has python3 but not curl.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4566/health')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot local provisioning. Runs on every `docker compose up`, waits for
+  # MiniStack, creates the Cognito pool/client/dev user/admin group, and writes
+  # infra/ministack/.cognito.env and frontend/.env. Idempotent; exits when done.
+  # See infra/ministack/bootstrap.sh.
+  bootstrap:
+    image: amazon/aws-cli:2.15.0
+    depends_on:
+      ministack:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://ministack:4566          # in-network (for the aws cli)
+      PUBLIC_AWS_ENDPOINT_URL: http://localhost:4566   # host-facing (written into env files)
+      # Testcontainers' Mode-B run sets this to "false" so the one-shot is a no-op
+      # (integration tests provision their own disposable Cognito pool).
+      BOOTSTRAP_APPLY: "${BOOTSTRAP_APPLY:-true}"
+    entrypoint: ["/bin/bash", "/workspace/infra/ministack/bootstrap.sh"]
+    volumes:
+      - ./:/workspace
+    restart: "no"
+
+volumes:
+  postgres-data:

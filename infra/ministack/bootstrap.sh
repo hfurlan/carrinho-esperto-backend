@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+#
+# One-shot local provisioning, run automatically by the `bootstrap` service in
+# docker-compose.yaml on every `docker compose up`.
+#
+# Provisions the local Cognito (MiniStack) and writes the generated env file for
+# the backend. The frontend SPA is a SEPARATE repository (carrinho-esperto-
+# frontend); copy COGNITO_CLIENT_ID into that repo's .env by hand for local dev
+# (see this repo's README).
+#
+#   Cognito : user pool + app client (no secret) + confirmed dev user
+#             + `admin` group with the dev user in it
+#   writes  : infra/ministack/.cognito.env   (sourced before `mvn spring-boot:run`)
+#
+# Idempotent: re-running reuses the existing pool / client / user / group and
+# only rewrites the env file when a value changed. Runs as root inside the
+# container; the generated file is chowned back to the host user (whoever
+# owns docker-compose.yaml).
+#
+# Requires: aws cli (provided by the amazon/aws-cli image), MiniStack reachable.
+
+set -euo pipefail
+
+# Testcontainers (Mode B) starts the compose file too; there this one-shot must do
+# nothing — the integration tests create their own disposable Cognito pool, and
+# rewriting the host .env file from an ephemeral pool would be harmful.
+if [ "${BOOTSTRAP_APPLY:-true}" != "true" ]; then
+  echo "bootstrap skipped (BOOTSTRAP_APPLY=${BOOTSTRAP_APPLY:-})"
+  exit 0
+fi
+
+REPO="${REPO_DIR:-/workspace}"
+ENDPOINT="${AWS_ENDPOINT_URL:-http://ministack:4566}"
+REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+
+POOL_NAME="${COGNITO_POOL_NAME:-carrinho-esperto-local}"
+CLIENT_NAME="${COGNITO_CLIENT_NAME:-carrinho-esperto-backend}"
+USERNAME="${COGNITO_USERNAME:-dev@carrinho-esperto.local}"
+PASSWORD="${COGNITO_PASSWORD:-Devpass123!}"
+ADMIN_GROUP="${COGNITO_ADMIN_GROUP:-admin}"
+
+# Public endpoint the browser and the backend-on-the-host use (not the in-network
+# service name).
+PUBLIC_ENDPOINT="${PUBLIC_AWS_ENDPOINT_URL:-http://localhost:4566}"
+
+export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
+export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
+export AWS_DEFAULT_REGION="${REGION}"
+
+aws() { command aws --endpoint-url "${ENDPOINT}" --region "${REGION}" "$@"; }
+
+echo "==> Waiting for MiniStack at ${ENDPOINT}"
+for _ in $(seq 1 60); do
+  if aws sts get-caller-identity >/dev/null 2>&1 \
+     || aws cognito-idp list-user-pools --max-results 1 >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+# ── Cognito ────────────────────────────────────────────────────────────────
+POOL_ID="$(aws cognito-idp list-user-pools --max-results 60 \
+  --query "UserPools[?Name=='${POOL_NAME}'].Id | [0]" --output text)"
+if [ "${POOL_ID}" = "None" ] || [ -z "${POOL_ID}" ]; then
+  POOL_ID="$(aws cognito-idp create-user-pool --pool-name "${POOL_NAME}" \
+    --query 'UserPool.Id' --output text)"
+  echo "==> Cognito: created user pool ${POOL_ID}"
+else
+  echo "==> Cognito: reusing user pool ${POOL_ID}"
+fi
+
+CLIENT_ID="$(aws cognito-idp list-user-pool-clients --user-pool-id "${POOL_ID}" \
+  --query "UserPoolClients[?ClientName=='${CLIENT_NAME}'].ClientId | [0]" --output text)"
+if [ "${CLIENT_ID}" = "None" ] || [ -z "${CLIENT_ID}" ]; then
+  CLIENT_ID="$(aws cognito-idp create-user-pool-client \
+    --user-pool-id "${POOL_ID}" --client-name "${CLIENT_NAME}" \
+    --no-generate-secret \
+    --explicit-auth-flows ALLOW_ADMIN_USER_PASSWORD_AUTH ALLOW_USER_PASSWORD_AUTH ALLOW_REFRESH_TOKEN_AUTH \
+    --query 'UserPoolClient.ClientId' --output text)"
+  echo "==> Cognito: created app client ${CLIENT_ID}"
+else
+  echo "==> Cognito: reusing app client ${CLIENT_ID}"
+fi
+
+if ! aws cognito-idp admin-get-user --user-pool-id "${POOL_ID}" --username "${USERNAME}" >/dev/null 2>&1; then
+  aws cognito-idp admin-create-user --user-pool-id "${POOL_ID}" --username "${USERNAME}" \
+    --user-attributes Name=email,Value="${USERNAME}" Name=email_verified,Value=true \
+    --message-action SUPPRESS >/dev/null
+  echo "==> Cognito: created user ${USERNAME}"
+else
+  echo "==> Cognito: reusing user ${USERNAME}"
+fi
+aws cognito-idp admin-set-user-password --user-pool-id "${POOL_ID}" \
+  --username "${USERNAME}" --password "${PASSWORD}" --permanent >/dev/null
+
+aws cognito-idp create-group --user-pool-id "${POOL_ID}" --group-name "${ADMIN_GROUP}" \
+  >/dev/null 2>&1 || true
+aws cognito-idp admin-add-user-to-group --user-pool-id "${POOL_ID}" \
+  --username "${USERNAME}" --group-name "${ADMIN_GROUP}" >/dev/null
+echo "==> Cognito: ${USERNAME} is in group '${ADMIN_GROUP}'"
+
+# MiniStack mirrors AWS: the token 'iss' is the AWS-style URL; the JWKS is served
+# from the local endpoint. The backend needs both.
+ISSUER_URI="https://cognito-idp.${REGION}.amazonaws.com/${POOL_ID}"
+JWK_SET_URI="${PUBLIC_ENDPOINT%/}/${POOL_ID}/.well-known/jwks.json"
+
+# ── generated env file ─────────────────────────────────────────────────────
+COGNITO_ENV="${REPO}/infra/ministack/.cognito.env"
+cat > "${COGNITO_ENV}" <<EOF
+# Generated by infra/ministack/bootstrap.sh (docker compose bootstrap) — do not commit.
+# Source this before starting the backend:  source infra/ministack/.cognito.env
+export COGNITO_ISSUER_URI="${ISSUER_URI}"
+export COGNITO_JWK_SET_URI="${JWK_SET_URI}"
+export COGNITO_USER_POOL_ID="${POOL_ID}"
+export COGNITO_CLIENT_ID="${CLIENT_ID}"
+export COGNITO_USERNAME="${USERNAME}"
+export COGNITO_PASSWORD="${PASSWORD}"
+export COGNITO_ADMIN_GROUP="${ADMIN_GROUP}"
+EOF
+
+# Hand the generated file back to the host user (owner of the compose file).
+OWNER="$(stat -c '%u:%g' "${REPO}/docker-compose.yaml" 2>/dev/null || echo '')"
+[ -n "${OWNER}" ] && chown "${OWNER}" "${COGNITO_ENV}" 2>/dev/null || true
+
+cat <<EOF
+
+────────────────────────────────────────────────────────────────────────────
+ Local environment provisioned. Nothing to edit by hand.
+
+   Pool id        ${POOL_ID}
+   App client id  ${CLIENT_ID}
+   Dev user       ${USERNAME} / ${PASSWORD}   (group: ${ADMIN_GROUP})
+   Issuer         ${ISSUER_URI}
+
+   wrote  infra/ministack/.cognito.env   -> source it before the backend
+
+ Next:
+   source infra/ministack/.cognito.env
+   mvn spring-boot:run -Dspring-boot.run.profiles=local
+   # Frontend SPA lives in the separate carrinho-esperto-frontend repo:
+   #   copy COGNITO_CLIENT_ID into ../carrinho-esperto-frontend/.env
+   #   as VITE_COGNITO_CLIENT_ID
+────────────────────────────────────────────────────────────────────────────
+EOF
